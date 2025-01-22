@@ -1,0 +1,87 @@
+#!./venv/bin/python3
+import os
+import argparse
+import json
+import subprocess 
+
+
+def run_fio_test(filename, iodepth_values, job_name):
+    results = []
+    for iodepth in iodepth_values:
+        fio_command = [
+            "fio", "--name", job_name, "--filename", filename,
+            "--ioengine=libaio", "--direct=1", "--bs=4k", "--size=1G",
+            f"--iodepth={iodepth}", "--rw=randread", "--output-format=json"
+        ]
+        process = subprocess.run(fio_command, capture_output=True, text=True, check=True)
+        fio_output = json.loads(process.stdout)
+        latency_mean = fio_output['jobs'][0]['read']['lat_ns']['mean']  # Adjusted key
+        results.append(latency_mean)
+    return results
+
+def save_latency_data(iodepth_values, latencies, filename):
+    with open(filename, 'w') as f:
+        for depth, latency in zip(iodepth_values, latencies):
+            f.write(f"{depth} {latency}\n")
+
+
+def create_gnuplot_script(script_file, data_file, output_file):
+    script = f"""
+    set terminal pngcairo size 800,600 enhanced font 'Arial,10'
+    set output '{output_file}'
+    set title "Latency vs I/O Depth"
+    set xlabel "I/O Depth"
+    set ylabel "Latency (ns)"
+    set grid
+    set logscale x 2
+    set style line 1 lc rgb '#0072bd' lw 2 pt 7 ps 1.5
+    plot '{data_file}' using 1:2 with linespoints ls 1 title "Latency"
+    """
+    with open(script_file, "w") as f:
+        f.write(script)
+
+
+def run_gnuplot(script_file):
+    try:
+        subprocess.run(["gnuplot", script_file], check=True)
+        print("Graph generated successfully!")
+    except subprocess.CalledProcessError as e:
+        print(f"Error running Gnuplot: {e}")
+
+
+def generate_latency_graph(iodepth_values, latencies, output):
+    data_file = f"{output}.dat"
+    script_file = f"{output}.plt"
+    output_file = f"{output}.png"
+
+    save_latency_data(iodepth_values, latencies, data_file)
+    create_gnuplot_script(script_file, data_file, output_file)
+    run_gnuplot(script_file)
+    
+    os.remove(data_file)
+    os.remove(script_file)
+
+
+def main():
+    # Parse command-line arguments
+    parser = argparse.ArgumentParser(description="Run a fio test and generate a latency graph.")
+    parser.add_argument('--name', required=True, help="Test name")
+    parser.add_argument('--filename', required=True, help="File to test on")
+    parser.add_argument('--output', required=True, help="Output image file for the graph")
+    
+    args = parser.parse_args()
+    
+    # values for iodepth
+    iodepth_values = [i for i in range(1, 256, 16)]
+    
+    print("Running fio tests...")
+    latency_values = run_fio_test(args.filename, iodepth_values, args.name)
+    
+    print(f"Saving the graph to {args.output}.png...")
+    generate_latency_graph(iodepth_values, latency_values, args.output)
+    
+    print(f"Graph saved to {args.output}.png")
+
+
+if __name__ == "__main__":
+    main()
